@@ -33,7 +33,8 @@ namespace PingGadget
 
         bool suppressRouterEvent;
         bool switching;
-        bool closeAfterSwitch;
+        Task switchWork;                     // the running switch, if any
+        CancellationTokenSource switchCancel;
         int switchGeneration;
         int lastAutoIndex = -1;
         readonly Stopwatch failClock = new Stopwatch();
@@ -98,16 +99,17 @@ namespace PingGadget
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // Quitting mid-switch could leave Astrill OFF; finish (or time out) first. Windows
-            // shutdown can't be delayed, so only defer a close the user asked for.
-            if (switching && e.CloseReason == CloseReason.UserClosing)
-            {
-                e.Cancel = true;
-                closeAfterSwitch = true;
-                pingText = "Closing after switch...";
-                Invalidate();
-            }
             base.OnFormClosing(e);
+            if (e.Cancel || switchWork == null || switchWork.IsCompleted) return;
+
+            // Close right away, but quitting mid-switch could leave Astrill OFF: hide the gadget,
+            // cancel the switch so it skips the gateway change and the VPN wait, and give it a
+            // moment to turn Astrill back ON (a pending OFF check can take up to 8 s).
+            Hide();
+            try { switchCancel.Cancel(); }
+            catch (ObjectDisposedException) { }
+            try { switchWork.Wait(15000); }
+            catch (AggregateException) { }
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -460,8 +462,12 @@ namespace PingGadget
             int timeoutMs = current.SwitchTimeoutSeconds * 1000;
             var cancel = new CancellationTokenSource(timeoutMs);
             Task<bool> work = Task.Run(() => NetworkManager.SwitchRouter(ip, current, cancel.Token), cancel.Token);
+            switchWork = work;
+            switchCancel = cancel;
             string status = null, error = null;
-            if (await Task.WhenAny(work, Task.Delay(timeoutMs + 5000)) != work)
+            bool finished = await Task.WhenAny(work, Task.Delay(timeoutMs + 5000)) == work;
+            if (IsDisposed) return; // closed while switching
+            if (!finished)
             {
                 cancel.Cancel();
                 Task abandoned = work.ContinueWith(t => { var ignored = t.Exception; cancel.Dispose(); });
@@ -490,12 +496,6 @@ namespace PingGadget
             pingText = status ?? "Time=--- TTL=---"; // replaced by the next ping result
             SyncRouterSelection();
             Invalidate();
-
-            if (closeAfterSwitch)
-            {
-                Close();
-                return;
-            }
             // Only after the gadget is usable again: the dialog blocks until it is dismissed.
             if (error != null && interactive)
                 MessageBox.Show(this, error, "Switch router failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
