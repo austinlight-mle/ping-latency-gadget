@@ -24,6 +24,7 @@ namespace PingGadget
             this.onSave = onSave;
 
             Text = "Ping Gadget Settings";
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
