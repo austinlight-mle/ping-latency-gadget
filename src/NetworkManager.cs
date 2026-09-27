@@ -6,11 +6,15 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace PingGadget
 {
     static class NetworkManager
     {
+        // A switch that timed out may still be running; never let two touch Astrill or routes at once.
+        static readonly object SwitchLock = new object();
+
         // Finds the connected adapter whose IPv4 subnet contains the router address.
         public static NetworkInterface FindAdapter(IPAddress router)
         {
@@ -53,26 +57,40 @@ namespace PingGadget
         }
 
         // Turns Astrill off, points the adapter at the new gateway, then turns Astrill back on.
-        public static void SwitchRouter(IPAddress newGw, AppSettings settings)
+        // Returns false when the VPN hadn't reconnected by the time the switch was cancelled.
+        public static bool SwitchRouter(IPAddress newGw, AppSettings settings, CancellationToken cancel)
         {
-            NetworkInterface nic = FindAdapter(newGw);
-            if (nic == null)
-                throw new InvalidOperationException("No connected network adapter is on the same subnet as " + newGw + ".");
-
-            int ifIndex = nic.GetIPProperties().GetIPv4Properties().Index;
-            IPAddress oldGw = GetGateway(nic);
-
-            AstrillOffResult astrill = settings.ToggleAstrill ? Astrill.TurnOff() : AstrillOffResult.Untouched;
+            while (!Monitor.TryEnter(SwitchLock, 250)) cancel.ThrowIfCancellationRequested();
             try
             {
-                SetAdapterGateway(ifIndex, newGw);
-                if (oldGw != null && !oldGw.Equals(newGw))
-                    MoveRoutes(ifIndex, oldGw, newGw);
+                cancel.ThrowIfCancellationRequested();
+                NetworkInterface nic = FindAdapter(newGw);
+                if (nic == null)
+                    throw new InvalidOperationException("No connected network adapter is on the same subnet as " + newGw + ".");
+
+                int ifIndex = nic.GetIPProperties().GetIPv4Properties().Index;
+                IPAddress oldGw = GetGateway(nic);
+
+                AstrillOffResult astrill = settings.ToggleAstrill ? Astrill.TurnOff() : AstrillOffResult.Untouched;
+                bool vpnBack = true;
+                try
+                {
+                    // Too late: the user has been told it timed out, so don't change the gateway now.
+                    cancel.ThrowIfCancellationRequested();
+                    SetAdapterGateway(ifIndex, newGw);
+                    if (oldGw != null && !oldGw.Equals(newGw))
+                        MoveRoutes(ifIndex, oldGw, newGw);
+                }
+                finally
+                {
+                    // Bring the VPN back even if the gateway change failed or was cancelled.
+                    vpnBack = Astrill.TurnOn(astrill, settings.AstrillPath, cancel);
+                }
+                return vpnBack;
             }
             finally
             {
-                // Bring the VPN back even if the gateway change failed.
-                Astrill.TurnOn(astrill, settings.AstrillPath);
+                Monitor.Exit(SwitchLock);
             }
         }
 

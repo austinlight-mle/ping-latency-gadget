@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -18,7 +19,7 @@ namespace PingGadget
         AppSettings settings;
         readonly ComboBox routerBox;
         readonly ContextMenuStrip menu;
-        readonly Timer timer;
+        readonly System.Windows.Forms.Timer timer;
         readonly Ping ping = new Ping();
         SettingsForm settingsForm;
 
@@ -32,6 +33,7 @@ namespace PingGadget
 
         bool suppressRouterEvent;
         bool switching;
+        bool closeAfterSwitch;
         int switchGeneration;
         int lastAutoIndex = -1;
         readonly Stopwatch failClock = new Stopwatch();
@@ -65,7 +67,7 @@ namespace PingGadget
             routerBox.SelectedIndexChanged += RouterBox_SelectedIndexChanged;
             Controls.Add(routerBox);
 
-            timer = new Timer { Interval = 1000 };
+            timer = new System.Windows.Forms.Timer { Interval = 1000 };
             timer.Tick += Timer_Tick;
 
             NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
@@ -92,6 +94,20 @@ namespace PingGadget
             SyncRouterSelection();
             timer.Start();
             Timer_Tick(this, EventArgs.Empty);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // Quitting mid-switch could leave Astrill OFF; finish (or time out) first. Windows
+            // shutdown can't be delayed, so only defer a close the user asked for.
+            if (switching && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                closeAfterSwitch = true;
+                pingText = "Closing after switch...";
+                Invalidate();
+            }
+            base.OnFormClosing(e);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -377,7 +393,12 @@ namespace PingGadget
         void OnNetworkAddressChanged(object sender, EventArgs e)
         {
             nicStale = true;
-            if (IsHandleCreated) BeginInvoke(new Action(SyncRouterSelection));
+            // Raised on a pool thread; the window may be closing, and an exception here would crash the app.
+            try
+            {
+                if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(SyncRouterSelection));
+            }
+            catch (InvalidOperationException) { }
         }
 
         // ---------- Router selection ----------
@@ -432,27 +453,52 @@ namespace PingGadget
             pingText = "Switching...";
             Invalidate();
 
+            // The worker stops waiting for the VPN when the token fires. The extra grace period on
+            // the UI side covers a step that never returns (e.g. Windows hanging on the gateway
+            // change); the worker is then abandoned and later switches wait for it to finish.
             AppSettings current = settings;
-            try
+            int timeoutMs = current.SwitchTimeoutSeconds * 1000;
+            var cancel = new CancellationTokenSource(timeoutMs);
+            Task<bool> work = Task.Run(() => NetworkManager.SwitchRouter(ip, current, cancel.Token), cancel.Token);
+            string status = null, error = null;
+            if (await Task.WhenAny(work, Task.Delay(timeoutMs + 5000)) != work)
             {
-                await Task.Run(delegate { NetworkManager.SwitchRouter(ip, current); });
+                cancel.Cancel();
+                Task abandoned = work.ContinueWith(t => { var ignored = t.Exception; cancel.Dispose(); });
+                status = "Switch timed out";
             }
-            catch (Exception ex)
+            else
             {
-                if (interactive)
-                    MessageBox.Show(this, ex.Message, "Switch router failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                cancel.Dispose();
+                if (work.IsFaulted)
+                {
+                    Exception ex = work.Exception.GetBaseException();
+                    status = "Switch failed";
+                    error = ex.Message;
+                }
+                else if (work.IsCanceled)
+                    status = "Switch timed out";
+                else if (!work.Result)
+                    status = "VPN not reconnected";
             }
-            finally
+
+            switching = false;
+            switchGeneration++;
+            failClock.Reset(); // give the new router the full wait before judging it
+            routerBox.Enabled = true;
+            nicStale = true;
+            pingText = status ?? "Time=--- TTL=---"; // replaced by the next ping result
+            SyncRouterSelection();
+            Invalidate();
+
+            if (closeAfterSwitch)
             {
-                switching = false;
-                switchGeneration++;
-                failClock.Reset(); // give the new router the full wait before judging it
-                routerBox.Enabled = true;
-                nicStale = true;
-                pingText = "Time=--- TTL=---";
-                SyncRouterSelection();
-                Invalidate();
+                Close();
+                return;
             }
+            // Only after the gadget is usable again: the dialog blocks until it is dismissed.
+            if (error != null && interactive)
+                MessageBox.Show(this, error, "Switch router failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         void RouterBox_DrawItem(object sender, DrawItemEventArgs e)

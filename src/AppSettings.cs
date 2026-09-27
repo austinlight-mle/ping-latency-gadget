@@ -27,6 +27,8 @@ namespace PingGadget
     {
         public const string DefaultAstrillPath = @"C:\Program Files (x86)\Astrill\astrill.exe";
 
+        public const int MinAutoSwitchSeconds = 3, MinSwitchTimeoutSeconds = 20, MaxSeconds = 600;
+
         public List<RouterInfo> Routers = new List<RouterInfo>();
         public string PingTarget = "teams.com";
         public bool ShowPing = true;
@@ -35,6 +37,7 @@ namespace PingGadget
         public bool ToggleAstrill = true;
         public bool AutoSwitch = false;
         public int AutoSwitchSeconds = 10;
+        public int SwitchTimeoutSeconds = 60;
         public string AstrillPath = DefaultAstrillPath;
         public Color ForeColor = Color.Lime;
         public Color BackColor = Color.Black;
@@ -80,6 +83,7 @@ namespace PingGadget
                         case "AstrillPath": s.AstrillPath = val; break;
                         case "AutoSwitch": s.AutoSwitch = val == "1"; break;
                         case "AutoSwitchSeconds": s.AutoSwitchSeconds = int.Parse(val, CultureInfo.InvariantCulture); break;
+                        case "SwitchTimeoutSeconds": s.SwitchTimeoutSeconds = int.Parse(val, CultureInfo.InvariantCulture); break;
                         case "ForeColor": s.ForeColor = ColorTranslator.FromHtml(val); break;
                         case "BackColor": s.BackColor = ColorTranslator.FromHtml(val); break;
                         case "FontSize": s.FontSize = float.Parse(val, CultureInfo.InvariantCulture); break;
@@ -88,11 +92,18 @@ namespace PingGadget
                         case "Y": s.Y = int.Parse(val, CultureInfo.InvariantCulture); break;
                     }
                 }
-                catch (FormatException)
+                catch (Exception)
                 {
-                    // Ignore malformed values and keep the default.
+                    // Ignore malformed values (bad number, out of range, unknown color) and keep the default.
                 }
             }
+
+            // Hand-edited values outside what the Settings window allows would misbehave (a zero font
+            // size throws, a zero auto-switch delay switches every second), so clamp them the same way.
+            s.AutoSwitchSeconds = Clamp(s.AutoSwitchSeconds, MinAutoSwitchSeconds, MaxSeconds);
+            s.SwitchTimeoutSeconds = Clamp(s.SwitchTimeoutSeconds, MinSwitchTimeoutSeconds, MaxSeconds);
+            s.Opacity = Clamp(s.Opacity, 20, 100);
+            s.FontSize = float.IsNaN(s.FontSize) ? 10f : Math.Max(6f, Math.Min(36f, s.FontSize));
             return s;
         }
 
@@ -108,6 +119,7 @@ namespace PingGadget
             lines.Add("AstrillPath=" + AstrillPath);
             lines.Add("AutoSwitch=" + (AutoSwitch ? "1" : "0"));
             lines.Add("AutoSwitchSeconds=" + AutoSwitchSeconds.ToString(CultureInfo.InvariantCulture));
+            lines.Add("SwitchTimeoutSeconds=" + SwitchTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
             lines.Add("ForeColor=" + ToHex(ForeColor));
             lines.Add("BackColor=" + ToHex(BackColor));
             lines.Add("FontSize=" + FontSize.ToString(CultureInfo.InvariantCulture));
@@ -125,6 +137,11 @@ namespace PingGadget
             c.Routers = new List<RouterInfo>();
             foreach (RouterInfo r in Routers) c.Routers.Add(new RouterInfo(r.Name, r.Ip));
             return c;
+        }
+
+        static int Clamp(int v, int min, int max)
+        {
+            return Math.Max(min, Math.Min(max, v));
         }
 
         static string ToHex(Color c)

@@ -19,7 +19,9 @@ Run `build.cmd`. It uses the C# compiler that ships with Windows (.NET Framework
   1. turns Astrill OFF by pressing the ON/OFF switch in its window (works while the window is visible, minimized or closed to the tray; only if "Toggle Astrill VPN" is checked),
   2. sets the adapter's gateway (the adapter whose subnet contains the router IP; it must use a static IP),
   3. re-points any leftover routes from the old router to the new one (e.g. Astrill's VPN-server route),
-  4. turns Astrill back ON and waits (up to 45 s) for the VPN to reconnect. This happens even if the gateway change fails.
+  4. turns Astrill back ON and waits for the VPN to reconnect. This happens even if the gateway change fails.
+
+  The whole switch is limited by **Stop waiting for a router switch after N seconds** (Settings → General, default 60). On a dead or weak router Astrill may never reconnect; when time runs out the gadget shows "Switch timed out" or "VPN not reconnected", re-enables the dropdown, and auto-switch moves on. Astrill is left ON, still trying to connect.
 
   Astrill is left alone when it is not running, when it is already OFF, or when the OFF click doesn't take effect. Only if it is connected but its switch can't be found (e.g. a future Astrill UI change) does the app fall back to closing Astrill and starting it again with `/autostart`.
 - **Auto-switch** (Settings → Ping): when the ping has failed continuously for X seconds, the gadget switches to the next router in the list, waits another X seconds, and keeps cycling until a ping succeeds. The countdown restarts after each switch, so allow enough time for Astrill to reconnect.

@@ -51,7 +51,7 @@ namespace PingGadget
                 {
                     bool? s = ReadSwitch(panel);
                     return (!s.HasValue || !s.Value) && !NetworkManager.IsVpnRouted();
-                }, 8000);
+                }, 8000, CancellationToken.None);
 
                 // If the click didn't register, don't click again later: that would turn it OFF.
                 if (!off) return AstrillOffResult.Untouched;
@@ -60,22 +60,22 @@ namespace PingGadget
             }
         }
 
-        public static void TurnOn(AstrillOffResult previous, string exePath)
+        // Returns false when the VPN didn't reconnect before the switch was cancelled (timed out).
+        // Always presses the switch first, even when already cancelled, so Astrill isn't left OFF.
+        public static bool TurnOn(AstrillOffResult previous, string exePath, CancellationToken cancel)
         {
             if (previous == AstrillOffResult.Closed)
             {
                 Start(exePath);
-                WaitForVpn();
-                return;
+                return WaitForVpn(cancel);
             }
-            if (previous != AstrillOffResult.Toggled) return;
+            if (previous != AstrillOffResult.Toggled) return true;
 
             Process proc = FindProcess();
             if (proc == null)
             {
                 Start(exePath);
-                WaitForVpn();
-                return;
+                return WaitForVpn(cancel);
             }
 
             using (proc)
@@ -85,23 +85,23 @@ namespace PingGadget
                 {
                     Kill(proc);
                     Start(exePath);
-                    WaitForVpn();
-                    return;
+                    return WaitForVpn(cancel);
                 }
 
                 Thread.Sleep(700); // Astrill may ignore clicks while still disconnecting
                 if (ReadSwitch(panel) != true) Click(panel);
                 Thread.Sleep(1200);
                 if (ReadSwitch(panel) == false) Click(panel); // visibly still OFF: the click was ignored
-                WaitForVpn();
+                return WaitForVpn(cancel);
             }
         }
 
         // Reconnecting takes 3-7 s typically, but 30+ s when Astrill falls back to another
-        // protocol; wait so callers don't judge the new router before the VPN is back.
-        static void WaitForVpn()
+        // protocol; wait so callers don't judge the new router before the VPN is back. On a dead
+        // or weak router it may never reconnect, so the wait ends when the switch times out.
+        static bool WaitForVpn(CancellationToken cancel)
         {
-            WaitUntil(NetworkManager.IsVpnRouted, 45000);
+            return WaitUntil(NetworkManager.IsVpnRouted, Timeout.Infinite, cancel);
         }
 
         static Process FindProcess()
@@ -191,6 +191,11 @@ namespace PingGadget
             GetClientRect(panel, out r);
             if (r.Right <= 0 || r.Bottom <= 0) return null;
 
+            // PrintWindow waits for Astrill to paint; if Astrill is frozen it would wait forever.
+            UIntPtr ignored;
+            if (SendMessageTimeout(panel, WM_NULL, UIntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1000, out ignored) == IntPtr.Zero)
+                return null;
+
             using (var bmp = new Bitmap(r.Right, r.Bottom))
             {
                 using (Graphics g = Graphics.FromImage(bmp))
@@ -221,13 +226,13 @@ namespace PingGadget
             PostMessage(panel, WM_LBUTTONUP, IntPtr.Zero, lParam);
         }
 
-        static bool WaitUntil(Func<bool> condition, int timeoutMs)
+        static bool WaitUntil(Func<bool> condition, int timeoutMs, CancellationToken cancel)
         {
             var clock = Stopwatch.StartNew();
             while (!condition())
             {
-                if (clock.ElapsedMilliseconds >= timeoutMs) return false;
-                Thread.Sleep(200);
+                if (timeoutMs != Timeout.Infinite && clock.ElapsedMilliseconds >= timeoutMs) return false;
+                if (cancel.WaitHandle.WaitOne(200)) return false;
             }
             return true;
         }
@@ -246,7 +251,8 @@ namespace PingGadget
             return sb.ToString();
         }
 
-        const uint WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202;
+        const uint WM_NULL = 0, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202;
+        const uint SMTO_ABORTIFHUNG = 2;
         const int MK_LBUTTON = 1;
         const uint GW_CHILD = 5, GW_HWNDNEXT = 2;
         const int GWL_STYLE = -16;
@@ -276,6 +282,7 @@ namespace PingGadget
         [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
         [DllImport("user32.dll")] static extern bool GetWindowPlacement(IntPtr hwnd, ref WINDOWPLACEMENT placement);
         [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+        [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out UIntPtr result);
         [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     }
 }

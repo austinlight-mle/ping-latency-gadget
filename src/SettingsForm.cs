@@ -16,7 +16,7 @@ namespace PingGadget
         readonly TextBox pingBox;
         readonly CheckBox chkPing, chkUp, chkDown, chkStartup, chkAstrill, chkAutoSwitch;
         readonly Button foreColorBtn, backColorBtn;
-        readonly NumericUpDown fontSizeBox, opacityBox, autoSwitchBox;
+        readonly NumericUpDown fontSizeBox, opacityBox, autoSwitchBox, switchTimeoutBox;
 
         public SettingsForm(AppSettings settings, Action<AppSettings> onSave)
         {
@@ -66,8 +66,8 @@ namespace PingGadget
             var autoRow = Flow();
             chkAutoSwitch = Check("Switch to next router when ping times out for", settings.AutoSwitch);
             chkAutoSwitch.Anchor = AnchorStyles.Left;
-            autoSwitchBox = new NumericUpDown { Minimum = 3, Maximum = 600, Width = S(60) };
-            autoSwitchBox.Value = Math.Max(3, Math.Min(600, settings.AutoSwitchSeconds));
+            autoSwitchBox = new NumericUpDown { Minimum = AppSettings.MinAutoSwitchSeconds, Maximum = AppSettings.MaxSeconds, Width = S(60) };
+            autoSwitchBox.Value = settings.AutoSwitchSeconds;
             autoSwitchBox.Enabled = chkAutoSwitch.Checked;
             chkAutoSwitch.CheckedChanged += delegate { autoSwitchBox.Enabled = chkAutoSwitch.Checked; };
             autoRow.Controls.AddRange(new Control[] { chkAutoSwitch, autoSwitchBox, TextLabel("seconds") });
@@ -89,6 +89,12 @@ namespace PingGadget
             chkAstrill = Check("Toggle Astrill VPN off/on when switching router", settings.ToggleAstrill);
             root.Controls.Add(chkStartup);
             root.Controls.Add(chkAstrill);
+
+            var timeoutRow = Flow();
+            switchTimeoutBox = new NumericUpDown { Minimum = AppSettings.MinSwitchTimeoutSeconds, Maximum = AppSettings.MaxSeconds, Width = S(60) };
+            switchTimeoutBox.Value = settings.SwitchTimeoutSeconds;
+            timeoutRow.Controls.AddRange(new Control[] { TextLabel("Stop waiting for a router switch after"), switchTimeoutBox, TextLabel("seconds") });
+            root.Controls.Add(timeoutRow);
 
             // Style
             root.Controls.Add(Header("Style"));
@@ -201,6 +207,7 @@ namespace PingGadget
             s.ToggleAstrill = chkAstrill.Checked;
             s.AutoSwitch = chkAutoSwitch.Checked;
             s.AutoSwitchSeconds = (int)autoSwitchBox.Value;
+            s.SwitchTimeoutSeconds = (int)switchTimeoutBox.Value;
             s.ForeColor = foreColorBtn.BackColor;
             s.BackColor = backColorBtn.BackColor;
             s.FontSize = (float)fontSizeBox.Value;
