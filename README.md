@@ -2,6 +2,8 @@
 
 A tiny always-on-top Windows gadget that shows ping latency and up/down throughput, and lets you switch the default gateway between your routers (restarting Astrill VPN along the way).
 
+For the macOS version, see [macos/README.md](macos/README.md).
+
 ```
 Time=250ms TTL=105
 Up=1.5Mbps  Down=2.5Mbps   [Router 2 ▾]

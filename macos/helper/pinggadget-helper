@@ -1,0 +1,55 @@
+#!/bin/sh
+# Ping Gadget privileged helper.
+# Installed root-owned at /Library/PrivilegedHelperTools/com.pinggadget.helper and allowed in
+# /etc/sudoers.d/pinggadget, so the gadget can change the gateway without asking for a password
+# on every switch (the macOS counterpart of the Windows app running as administrator).
+# It only runs networksetup and route, with validated arguments.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+VERSION=1
+
+fail() { echo "$*" >&2; exit 2; }
+ipv4() { echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "invalid IPv4 address: $1"; }
+
+case "$1" in
+check)
+    echo "$VERSION"
+    ;;
+
+set-gateway)    # <network service> <address> <subnet mask> <router>
+    [ $# -eq 5 ] || fail "usage: set-gateway service address mask router"
+    case "$2" in ""|-*) fail "invalid network service: $2" ;; esac
+    ipv4 "$3"; ipv4 "$4"; ipv4 "$5"
+    # networksetup exits 0 even when it fails, so look at what it prints.
+    out=$(networksetup -setmanual "$2" "$3" "$4" "$5" 2>&1)
+    case "$out" in *rror*|*"not a recognized"*) echo "$out" >&2; exit 1 ;; esac
+    ;;
+
+move-route)     # <destination> <mask> <old gateway> <new gateway> <interface for -ifscope, or ->
+    [ $# -eq 6 ] || fail "usage: move-route dest mask oldgw newgw ifscope|-"
+    ipv4 "$2"; ipv4 "$3"; ipv4 "$4"; ipv4 "$5"
+    if [ "$6" = "-" ]; then
+        set -- "$2" "$3" "$4" "$5"
+    else
+        echo "$6" | grep -Eq '^[a-z]+[0-9]+$' || fail "invalid interface: $6"
+        set -- "$2" "$3" "$4" "$5" -ifscope "$6"
+    fi
+    dest=$1 mask=$2 old=$3 new=$4
+    shift 4
+    if [ "$mask" = 255.255.255.255 ]; then
+        route -n -q delete -host "$dest" "$old" "$@" >/dev/null 2>&1
+        out=$(route -n add -host "$dest" "$new" "$@" 2>&1)
+    else
+        route -n -q delete -net "$dest" "$old" -netmask "$mask" "$@" >/dev/null 2>&1
+        # A stale default route is only dropped: the system already added one for the new router.
+        [ "$dest" = 0.0.0.0 ] && [ "$mask" = 0.0.0.0 ] && exit 0
+        out=$(route -n add -net "$dest" "$new" -netmask "$mask" "$@" 2>&1)
+    fi
+    rc=$?
+    case "$out" in *"File exists"*) exit 0 ;; esac
+    [ $rc -eq 0 ] || { echo "$out" >&2; exit 1; }
+    ;;
+
+*)
+    fail "usage: $0 check | set-gateway ... | move-route ..."
+    ;;
+esac
