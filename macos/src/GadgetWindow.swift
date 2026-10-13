@@ -413,7 +413,7 @@ final class GadgetController: NSObject, NSWindowDelegate, NSMenuDelegate {
         menu.minimumWidth = routerRect.width
         let back = settings.backColor.usingColorSpace(.sRGB) ?? .black
         let dark = 0.299 * back.redComponent + 0.587 * back.greenComponent + 0.114 * back.blueComponent < 0.5
-        menu.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        if #available(macOS 10.14, *) { menu.appearance = NSAppearance(named: dark ? .darkAqua : .aqua) }
         for (i, r) in settings.routers.enumerated() {
             let item = NSMenuItem(title: r.name, action: #selector(routerChosen(_:)), keyEquivalent: "")
             item.target = self

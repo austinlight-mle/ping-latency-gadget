@@ -9,9 +9,24 @@ Up=1.5Mbps  Down=2.5Mbps   [Router 2 ▾]
 
 ## Build
 
-Run `./build.sh`. It uses the Swift compiler from the Xcode Command Line Tools (`xcode-select --install`), so Xcode itself isn't needed. Output: `bin/PingGadget.app` (universal binary for Apple silicon and Intel, macOS 13 or later). Copy it to `/Applications`.
+Run `./build.sh` on a Mac with Xcode installed (it uses Xcode's Swift toolchain, which can build for Intel Macs). Output:
 
-The app is ad-hoc signed, not notarized. If you copy it to another Mac and macOS refuses to open it, run `xattr -dr com.apple.quarantine PingGadget.app` once.
+- `bin/PingGadget.app`: one universal app for **Intel Macs on macOS 10.13 (High Sierra) or later** and **Apple silicon Macs on macOS 11 or later**. It carries its own copy of the Swift runtime for macOS versions that don't include one.
+- `bin/PingGadget-macOS.zip`: the same app, zipped so its signature survives copying. **Copy this zip to other Macs**, not the `.app` folder. Copying a bare `.app` through chat apps, some cloud drives or a FAT-formatted USB stick can strip its permissions or signature, and macOS then says it is "damaged".
+
+## Install on another Mac
+
+1. Unzip `PingGadget-macOS.zip` and drag `PingGadget.app` to `/Applications`.
+2. Open it. The app is signed but not notarized by Apple (that needs a paid Apple Developer ID), so the first time macOS blocks it:
+   - **macOS 15 Sequoia or later:** after the warning, open System Settings → Privacy & Security, scroll down, click **Open Anyway** next to "PingGadget", and confirm.
+   - **macOS 14 or earlier:** Control-click (right-click) the app → **Open** → **Open**.
+3. If macOS says the app **is damaged**, or neither option appears, run this once in Terminal and open it again:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/PingGadget.app
+   ```
+
+After the first launch it opens normally.
 
 ## Use
 

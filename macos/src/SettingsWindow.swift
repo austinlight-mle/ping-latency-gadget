@@ -305,8 +305,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     private static func roundButton(_ symbol: String, _ tip: String) -> NSButton {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) ?? NSImage()
-        let b = NSButton(image: image, target: nil, action: nil)
+        let b: NSButton
+        if #available(macOS 11.0, *), let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
+            b = NSButton(image: image, target: nil, action: nil)
+        } else {
+            b = NSButton(title: symbol == "plus" ? "+" : "−", target: nil, action: nil) // no SF Symbols before macOS 11
+        }
         b.bezelStyle = .circular
         b.controlSize = .small
         b.toolTip = tip
