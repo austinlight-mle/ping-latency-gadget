@@ -46,6 +46,21 @@ namespace PingGadget
             return null;
         }
 
+        // The adapter's IPv4 address that shares a subnet with one of the routers.
+        public static IPAddress FindRouterSubnetAddress(NetworkInterface nic, IEnumerable<RouterInfo> routers)
+        {
+            foreach (UnicastIPAddressInformation a in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (a.Address.AddressFamily != AddressFamily.InterNetwork || a.IPv4Mask == null) continue;
+                foreach (RouterInfo r in routers)
+                {
+                    IPAddress ip;
+                    if (IPAddress.TryParse(r.Ip, out ip) && SameSubnet(a.Address, ip, a.IPv4Mask)) return a.Address;
+                }
+            }
+            return null;
+        }
+
         public static IPAddress GetGateway(NetworkInterface nic)
         {
             foreach (GatewayIPAddressInformation g in nic.GetIPProperties().GatewayAddresses)
@@ -105,36 +120,50 @@ namespace PingGadget
 
         static void SetAdapterGateway(int ifIndex, IPAddress gw)
         {
-            string query = "SELECT * FROM Win32_NetworkAdapterConfiguration WHERE InterfaceIndex = " + ifIndex;
-            using (var searcher = new ManagementObjectSearcher(query))
+            bool found = WithAdapterConfig("InterfaceIndex = " + ifIndex, delegate(ManagementObject mo)
+            {
+                if ((bool)mo["DHCPEnabled"])
+                    throw new InvalidOperationException(
+                        "The adapter uses DHCP. Configure a static IP address on it first.");
+                InvokeConfig(mo, "SetGateways", "change the gateway",
+                    "DefaultIPGateway", new string[] { gw.ToString() }, "GatewayCostMetric", new ushort[] { 256 });
+            });
+            if (!found)
+                throw new InvalidOperationException("Network adapter #" + ifIndex + " was not found in WMI.");
+        }
+
+        // Runs action on the adapter's Win32_NetworkAdapterConfiguration; false if none matches the filter.
+        public static bool WithAdapterConfig(string filter, Action<ManagementObject> action)
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_NetworkAdapterConfiguration WHERE " + filter))
             using (ManagementObjectCollection results = searcher.Get())
             {
                 foreach (ManagementObject mo in results)
                 {
                     using (mo)
                     {
-                        if ((bool)mo["DHCPEnabled"])
-                            throw new InvalidOperationException(
-                                "The adapter uses DHCP. Configure a static IP address on it first.");
-
-                        using (ManagementBaseObject inParams = mo.GetMethodParameters("SetGateways"))
-                        {
-                            inParams["DefaultIPGateway"] = new string[] { gw.ToString() };
-                            inParams["GatewayCostMetric"] = new ushort[] { 256 };
-                            using (ManagementBaseObject outParams = mo.InvokeMethod("SetGateways", inParams, null))
-                            {
-                                uint rc = Convert.ToUInt32(outParams["ReturnValue"]);
-                                // 0 = success, 1 = success but reboot required.
-                                if (rc != 0 && rc != 1)
-                                    throw new InvalidOperationException(
-                                        "Windows refused to change the gateway (WMI error " + rc + ").");
-                            }
-                        }
-                        return;
+                        action(mo);
+                        return true;
                     }
                 }
             }
-            throw new InvalidOperationException("Network adapter #" + ifIndex + " was not found in WMI.");
+            return false;
+        }
+
+        // Calls a Win32_NetworkAdapterConfiguration method with (name, value) argument pairs.
+        public static void InvokeConfig(ManagementObject mo, string method, string what, params object[] args)
+        {
+            using (ManagementBaseObject inParams = mo.GetMethodParameters(method))
+            {
+                for (int i = 0; i < args.Length; i += 2) inParams[(string)args[i]] = args[i + 1];
+                using (ManagementBaseObject outParams = mo.InvokeMethod(method, inParams, null))
+                {
+                    uint rc = Convert.ToUInt32(outParams["ReturnValue"]);
+                    // 0 = success, 1 = success but reboot required.
+                    if (rc != 0 && rc != 1)
+                        throw new InvalidOperationException("Windows refused to " + what + " (WMI error " + rc + ").");
+                }
+            }
         }
 
         // Re-points routes that still use the old gateway (e.g. the VPN server host route

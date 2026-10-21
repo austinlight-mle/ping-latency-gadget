@@ -19,6 +19,7 @@ namespace PingGadget
         AppSettings settings;
         readonly ComboBox routerBox;
         readonly ContextMenuStrip menu;
+        readonly ToolStripMenuItem internetItem;
         readonly System.Windows.Forms.Timer timer;
         readonly Ping ping = new Ping();
         SettingsForm settingsForm;
@@ -36,6 +37,9 @@ namespace PingGadget
         Task switchWork;                     // the running switch, if any
         CancellationTokenSource switchCancel;
         int switchGeneration;
+        bool internetOff;                    // the app has the internet disconnected
+        bool changingInternet;
+        Task internetWork;                   // the running Disconnect/Connect Internet, if any
         int lastAutoIndex = -1;
         readonly Stopwatch failClock = new Stopwatch();
         Rectangle textRect;
@@ -52,8 +56,11 @@ namespace PingGadget
             DoubleBuffered = true;
 
             menu = new ContextMenuStrip();
+            internetItem = new ToolStripMenuItem("Disconnect Internet", null, delegate { ToggleInternet(); });
+            menu.Items.Add(internetItem);
             menu.Items.Add("Settings", null, delegate { ShowSettings(); });
             menu.Items.Add("Close", null, delegate { Close(); });
+            menu.Opening += delegate { UpdateControls(); };
             ContextMenuStrip = menu;
 
             routerBox = new ComboBox
@@ -92,6 +99,7 @@ namespace PingGadget
         {
             base.OnLoad(e);
             PlaceOnScreen();
+            UpdateControls();
             SyncRouterSelection();
             timer.Start();
             Timer_Tick(this, EventArgs.Empty);
@@ -100,16 +108,28 @@ namespace PingGadget
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
-            if (e.Cancel || switchWork == null || switchWork.IsCompleted) return;
+            if (e.Cancel) return;
+            bool switchRunning = switchWork != null && !switchWork.IsCompleted;
+            bool internetRunning = internetWork != null && !internetWork.IsCompleted;
+            if (!switchRunning && !internetRunning) return;
 
-            // Close right away, but quitting mid-switch could leave Astrill OFF: hide the gadget,
-            // cancel the switch so it skips the gateway change and the VPN wait, and give it a
-            // moment to turn Astrill back ON (a pending OFF check can take up to 8 s).
+            // Close right away, but don't quit halfway through changing the network. Quitting
+            // mid-switch could leave Astrill OFF: cancel the switch so it skips the gateway change
+            // and the VPN wait, and give it a moment to turn Astrill back ON (a pending OFF check
+            // can take up to 8 s). A Disconnect/Connect Internet takes a few seconds; let it finish.
             Hide();
-            try { switchCancel.Cancel(); }
-            catch (ObjectDisposedException) { }
-            try { switchWork.Wait(15000); }
-            catch (AggregateException) { }
+            if (switchRunning)
+            {
+                try { switchCancel.Cancel(); }
+                catch (ObjectDisposedException) { }
+                try { switchWork.Wait(15000); }
+                catch (AggregateException) { }
+            }
+            if (internetRunning)
+            {
+                try { internetWork.Wait(15000); }
+                catch (AggregateException) { }
+            }
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -146,7 +166,7 @@ namespace PingGadget
             foreach (RouterInfo r in s.Routers) routerBox.Items.Add(r);
             suppressRouterEvent = false;
 
-            if (targetChanged) pingText = "Time=--- TTL=---";
+            if (targetChanged && !internetOff) pingText = "Time=--- TTL=---";
             nicStale = true;
             lastAutoIndex = -1;
             failClock.Reset();
@@ -287,6 +307,9 @@ namespace PingGadget
             if (settings.ShowUpload || settings.ShowDownload) UpdateSpeed();
             Invalidate();
 
+            // Nothing to ping while the internet is disconnected on purpose (and no reason to auto-switch).
+            if (internetOff || changingInternet) return;
+
             // Auto-switch needs ping results even when ping isn't displayed.
             if (!(settings.ShowPing || settings.AutoSwitch) || pingBusy || switching) return;
             pingBusy = true;
@@ -317,8 +340,8 @@ namespace PingGadget
                 pingBusy = false;
             }
 
-            // Ignore replies to pings sent before or during a router switch.
-            if (switching || generation != switchGeneration) return;
+            // Ignore replies to pings sent before or during a router switch or internet change.
+            if (switching || changingInternet || generation != switchGeneration) return;
             pingText = text;
             OnPingResult(ok);
             Invalidate();
@@ -350,7 +373,8 @@ namespace PingGadget
             if (nicStale)
             {
                 nicStale = false;
-                nic = NetworkManager.FindAdapter(settings.Routers);
+                // Disconnected, the adapter is no longer on the routers' subnet.
+                nic = internetOff ? Internet.FindSavedAdapter() : NetworkManager.FindAdapter(settings.Routers);
                 sampleClock.Reset();
             }
             if (nic == null)
@@ -398,9 +422,15 @@ namespace PingGadget
             // Raised on a pool thread; the window may be closing, and an exception here would crash the app.
             try
             {
-                if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(SyncRouterSelection));
+                if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(OnNetworkChangedUi));
             }
             catch (InvalidOperationException) { }
+        }
+
+        void OnNetworkChangedUi()
+        {
+            UpdateControls();
+            SyncRouterSelection();
         }
 
         // ---------- Router selection ----------
@@ -409,8 +439,17 @@ namespace PingGadget
         {
             if (switching) return;
             int index = -1;
-            NetworkInterface n = NetworkManager.FindAdapter(settings.Routers);
-            IPAddress gw = n != null ? NetworkManager.GetGateway(n) : null;
+            IPAddress gw;
+            if (internetOff)
+            {
+                // No gateway while disconnected: show the router that Connect will bring back.
+                gw = Internet.SavedGateway();
+            }
+            else
+            {
+                NetworkInterface n = NetworkManager.FindAdapter(settings.Routers);
+                gw = n != null ? NetworkManager.GetGateway(n) : null;
+            }
             if (gw != null)
             {
                 for (int i = 0; i < settings.Routers.Count; i++)
@@ -435,7 +474,7 @@ namespace PingGadget
         // interactive = picked by the user (show errors); otherwise an automatic switch.
         async void SwitchTo(int index, bool interactive)
         {
-            if (switching || index < 0 || index >= settings.Routers.Count) return;
+            if (switching || changingInternet || internetOff || index < 0 || index >= settings.Routers.Count) return;
             RouterInfo router = settings.Routers[index];
 
             IPAddress ip;
@@ -451,7 +490,7 @@ namespace PingGadget
             suppressRouterEvent = true;
             routerBox.SelectedIndex = index;
             suppressRouterEvent = false;
-            routerBox.Enabled = false;
+            UpdateControls();
             pingText = "Switching...";
             Invalidate();
 
@@ -491,7 +530,7 @@ namespace PingGadget
             switching = false;
             switchGeneration++;
             failClock.Reset(); // give the new router the full wait before judging it
-            routerBox.Enabled = true;
+            UpdateControls();
             nicStale = true;
             pingText = status ?? "Time=--- TTL=---"; // replaced by the next ping result
             SyncRouterSelection();
@@ -499,6 +538,69 @@ namespace PingGadget
             // Only after the gadget is usable again: the dialog blocks until it is dismissed.
             if (error != null && interactive)
                 MessageBox.Show(this, error, "Switch router failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // ---------- Disconnect / Connect Internet ----------
+
+        // Syncs the menu item and the router dropdown with the current state. The saved state can
+        // also change outside the app (someone restoring the IP by hand), so it's re-checked here.
+        void UpdateControls()
+        {
+            if (!changingInternet)
+            {
+                try { Internet.Reconcile(); }
+                catch (Exception) { /* keep the saved settings if in doubt */ }
+                bool off = Internet.IsDisconnected;
+                if (off != internetOff)
+                {
+                    internetOff = off;
+                    nicStale = true;
+                    pingText = off ? "Internet off" : "Time=--- TTL=---";
+                    Invalidate();
+                }
+            }
+            internetItem.Text = internetOff ? "Connect Internet" : "Disconnect Internet";
+            internetItem.Enabled = !switching && !changingInternet;
+            // Switching routers needs the adapter on the routers' subnet, which it isn't while disconnected.
+            routerBox.Enabled = !switching && !changingInternet && !internetOff;
+        }
+
+        async void ToggleInternet()
+        {
+            if (switching || changingInternet) return;
+            bool connect = internetOff;
+            changingInternet = true;
+            UpdateControls();
+            pingText = connect ? "Connecting..." : "Disconnecting...";
+            Invalidate();
+
+            List<RouterInfo> routers = settings.Routers;
+            Task work = connect ? Task.Run(() => Internet.Connect()) : Task.Run(() => Internet.Disconnect(routers));
+            internetWork = work;
+            string error = null;
+            try
+            {
+                await work;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+            if (IsDisposed) return; // closed meanwhile
+
+            changingInternet = false;
+            switchGeneration++; // ignore pings sent before the change
+            failClock.Reset();
+            lastAutoIndex = -1;
+            nicStale = true;
+            UpdateControls();
+            pingText = internetOff ? "Internet off" : "Time=--- TTL=---";
+            SyncRouterSelection();
+            Invalidate();
+            // Only after the gadget is usable again: the dialog blocks until it is dismissed.
+            if (error != null)
+                MessageBox.Show(this, error, connect ? "Connect Internet failed" : "Disconnect Internet failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         void RouterBox_DrawItem(object sender, DrawItemEventArgs e)

@@ -16,7 +16,7 @@ Run `build.cmd`. It uses the C# compiler that ships with Windows (.NET Framework
 ## Use
 
 - Drag anywhere on the gadget to move it; the position is remembered.
-- Right-click → **Settings** / **Close**.
+- Right-click → **Disconnect Internet** / **Settings** / **Close**.
 - Pick a router in the dropdown to make it the gateway. The app:
   1. turns Astrill OFF by pressing the ON/OFF switch in its window (works while the window is visible, minimized or closed to the tray; only if "Toggle Astrill VPN" is checked),
   2. sets the adapter's gateway (the adapter whose subnet contains the router IP; it must use a static IP),
@@ -28,6 +28,9 @@ Run `build.cmd`. It uses the C# compiler that ships with Windows (.NET Framework
   Astrill is left alone when it is not running, when it is already OFF, or when the OFF click doesn't take effect. Only if it is connected but its switch can't be found (e.g. a future Astrill UI change) does the app fall back to closing Astrill and starting it again with `/autostart`.
 - **Auto-switch** (Settings → Ping): when the ping has failed continuously for X seconds, the gadget switches to the next router in the list, waits another X seconds, and keeps cycling until a ping succeeds. The countdown restarts after each switch, so allow enough time for Astrill to reconnect.
 - Up/Down is the live throughput of the physical adapter (like Task Manager), not a speed test.
+- **Disconnect Internet** cuts the internet off by moving the router-facing adapter to `10.10.10.X` / `255.255.255.0` with no gateway and no DNS (X is the last number of its current IP, e.g. `192.168.1.162` → `10.10.10.162`). The menu item then reads **Connect Internet**, which puts the original IP, mask, gateway and DNS back. While disconnected the gadget shows "Internet off", stops pinging, and locks the router dropdown (it shows the router that Connect will restore).
+
+  The original settings are saved to `%APPDATA%\PingGadget\offline.ini` before anything changes, so Connect still works after closing the app or rebooting. If you restore the IP by hand instead, the app notices and forgets the saved copy. Like router switching, it needs a static IP. Astrill isn't turned off or on by this.
 
 The app runs as administrator (required to change the gateway). "Run at Windows start" creates a logon scheduled task so it starts elevated without a UAC prompt.
 
