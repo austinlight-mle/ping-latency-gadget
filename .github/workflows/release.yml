@@ -1,0 +1,113 @@
+name: Build and release
+
+# Every push to main builds the Windows and macOS apps. If the version in the VERSION file has no
+# release yet, a release "v<version>" is published with both downloads. Otherwise the build only
+# checks that everything still compiles: bump VERSION to publish a new release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One run at a time, so two quick pushes can't both try to create the same release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Read VERSION
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      publish: ${{ steps.read.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(tr -d ' \t\r\n' < VERSION)
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=VERSION::VERSION must be three numbers like 1.2.3 (found '$version')."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release v$version already exists, so this build won't be published. Bump VERSION to publish a new release."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    name: Build Windows app
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        shell: cmd
+        run: build.cmd
+      - name: Check version
+        shell: pwsh
+        run: |
+          $v = (Get-Item bin\PingGadget.exe).VersionInfo.ProductVersion
+          if ($v -ne '${{ needs.version.outputs.version }}') { throw "PingGadget.exe has version '$v'" }
+          "PingGadget.exe version $v"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: bin/PingGadget.exe
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS app
+    needs: version
+    # Pinned rather than macos-latest: the app still supports Intel Macs on macOS 10.13, and
+    # this image's Xcode 16 can build for that.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: sh macos/build.sh
+      - name: Check version and architectures
+        run: |
+          app=macos/bin/PingGadget.app
+          v=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
+          if [ "$v" != "${{ needs.version.outputs.version }}" ]; then
+            echo "::error::PingGadget.app has version '$v'"
+            exit 1
+          fi
+          echo "PingGadget.app version $v, architectures: $(lipo -archs "$app/Contents/MacOS/PingGadget")"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: macos/bin/PingGadget-macOS.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [version, windows, macos]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release v${{ needs.version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cat > notes.md << 'EOF'
+          **Windows:** download `PingGadget.exe` and run it (it asks for administrator rights).
+
+          **macOS:** download `PingGadget-macOS.zip`, unzip it and move `PingGadget.app` to Applications. The app isn't notarized, so the first launch needs **Open Anyway** (System Settings → Privacy & Security) or Control-click → **Open**; see the macOS README.
+          EOF
+          gh release create "v$VERSION" dist/PingGadget.exe dist/PingGadget-macOS.zip \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Ping Gadget $VERSION" --notes-file notes.md --generate-notes

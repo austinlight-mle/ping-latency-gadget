@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings to run on macOS, even when edited on Windows.
+*.sh text eol=lf
+macos/helper/pinggadget-helper text eol=lf
+*.cmd text eol=crlf

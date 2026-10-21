@@ -9,9 +9,17 @@ Time=250ms TTL=105
 Up=1.5Mbps  Down=2.5Mbps   [Router 2 ▾]
 ```
 
+## Download
+
+Get the latest version from [Releases](https://github.com/austinlight-mle/ping-latency-gadget/releases/latest): `PingGadget.exe` for Windows, `PingGadget-macOS.zip` for macOS.
+
 ## Build
 
 Run `build.cmd`. It uses the C# compiler that ships with Windows (.NET Framework 4.x), so no SDK is needed. Output: `bin\PingGadget.exe`.
+
+## Releases
+
+The version lives in the `VERSION` file (three numbers, e.g. `1.2.0`) and is stamped into both apps. Every push to `main` makes GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) build the Windows and macOS apps. If no release exists yet for that version, it publishes release `v<version>` with both downloads. If one already exists, the build only checks that everything compiles. To publish, bump `VERSION` and push.
 
 ## Use
 

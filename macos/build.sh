@@ -5,6 +5,13 @@
 set -e
 cd "$(dirname "$0")"
 
+# The version comes from the VERSION file at the repository root (shared with the Windows build).
+VERSION=$(tr -d ' \t\r\n' < ../VERSION)
+if [ -z "$VERSION" ]; then
+    echo "error: ../VERSION is empty." >&2
+    exit 1
+fi
+
 # The Swift back-deployment libraries for Intel ship with Xcode; the Command Line Tools on
 # Apple silicon only have them for arm64. Use Xcode when it's installed.
 if [ -z "$DEVELOPER_DIR" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
@@ -32,6 +39,8 @@ xcrun swift-stdlib-tool --copy --platform macosx --scan-executable "$APP/Content
     --source-libraries "$USR/lib/swift-5.0/macosx" --destination "$APP/Contents/Frameworks"
 
 cp Info.plist "$APP/Contents/"
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$VERSION" "$APP/Contents/Info.plist"
 cp helper/pinggadget-helper helper/install-helper.sh "$APP/Contents/Resources/"
 chmod 755 "$APP/Contents/Resources/pinggadget-helper" "$APP/Contents/Resources/install-helper.sh"
 
@@ -55,4 +64,4 @@ codesign --verify --strict "$APP"
 # ditto keeps the signature and permissions intact; zipping in Finder works too.
 ditto -c -k --keepParent "$APP" "$ZIP"
 rm -rf "$OBJ"
-echo "Built $APP and $ZIP"
+echo "Built $APP and $ZIP (version $VERSION)"
