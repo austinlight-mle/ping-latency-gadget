@@ -14,6 +14,10 @@ Run `./build.sh` on a Mac with Xcode installed (it uses Xcode's Swift toolchain,
 - `bin/PingGadget.app`: one universal app for **Intel Macs on macOS 10.13 (High Sierra) or later** and **Apple silicon Macs on macOS 11 or later**. It carries its own copy of the Swift runtime for macOS versions that don't include one.
 - `bin/PingGadget-macOS.zip`: the same app, zipped so its signature survives copying. **Copy this zip to other Macs**, not the `.app` folder. Copying a bare `.app` through chat apps, some cloud drives or a FAT-formatted USB stick can strip its permissions or signature, and macOS then says it is "damaged".
 
+### Code signing
+
+`build.sh` signs the app with a self-signed certificate, "PingGadget Code Signing", which it creates on the first build in its own keychain, `~/Library/Keychains/pinggadget-codesign.keychain-db`. macOS remembers the Accessibility permission for "this app signed by this certificate", so the grant isn't lost on restart or when you install a newer build. Keep that keychain file (back it up if you rebuild on another Mac); a new certificate means granting Accessibility once more on every Mac.
+
 ## Install on another Mac
 
 1. Unzip `PingGadget-macOS.zip` and drag `PingGadget.app` to `/Applications`.
@@ -48,7 +52,7 @@ After the first launch it opens normally.
 ## Permissions
 
 - **Administrator rights (once).** Changing the gateway and routes needs root. Instead of running the whole app as root (as the Windows app runs as administrator), the first time it's needed macOS asks for your password and the app installs a small helper script, `/Library/PrivilegedHelperTools/com.pinggadget.helper`, and a rule in `/etc/sudoers.d/pinggadget` that lets your account run that one script without a password. After that, switches never prompt, including automatic switches. The helper only runs `networksetup -setmanual` and `route` with validated arguments.
-- **Accessibility** (System Settings → Privacy & Security → Accessibility → Ping Gadget). Needed to press Astrill's ON/OFF toggle. Without it, the app falls back to quitting and restarting Astrill. An ad-hoc signed app gets a new identity on every rebuild, so after rebuilding, remove Ping Gadget from that list and add it again.
+- **Accessibility** (System Settings → Privacy & Security → Accessibility → PingGadget). Needed to press Astrill's ON/OFF toggle. Without it, the app falls back to quitting and restarting Astrill. The app asks once, on its first launch; if you skip it, use **Allow Accessibility…** in Settings → General. The grant survives restarts and rebuilds because the app is signed with a fixed certificate (see Code signing above).
 
 **Open at login** (Settings → General) adds `~/Library/LaunchAgents/com.pinggadget.launcher.plist`.
 
