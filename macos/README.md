@@ -12,11 +12,27 @@ Up=1.5Mbps  Down=2.5Mbps   [Router 2 ▾]
 Run `./build.sh` on a Mac with Xcode installed (it uses Xcode's Swift toolchain, which can build for Intel Macs). Output:
 
 - `bin/PingGadget.app`: one universal app for **Intel Macs on macOS 10.13 (High Sierra) or later** and **Apple silicon Macs on macOS 11 or later**. It carries its own copy of the Swift runtime for macOS versions that don't include one.
-- `bin/PingGadget-macOS.zip`: the same app, zipped so its signature survives copying. **Copy this zip to other Macs**, not the `.app` folder. Copying a bare `.app` through chat apps, some cloud drives or a FAT-formatted USB stick can strip its permissions or signature, and macOS then says it is "damaged".
+- The downloads, each zipped (or in a disk image) so the signature survives copying. **Copy one of these to other Macs**, not the `.app` folder. Copying a bare `.app` through chat apps, some cloud drives or a FAT-formatted USB stick can strip its permissions or signature, and macOS then says it is "damaged".
+
+  | File | For |
+  |---|---|
+  | `bin/PingGadget-macOS.zip` | any Mac (universal) |
+  | `bin/PingGadget-macOS.dmg` | any Mac (universal), as a disk image to drag to Applications |
+  | `bin/PingGadget-macOS-AppleSilicon.zip` | Apple silicon Macs, macOS 11+ (smallest: no bundled Swift runtime) |
+  | `bin/PingGadget-macOS-Intel.zip` | Intel Macs, macOS 10.13+ |
+
+You don't have to build it yourself: every push to `main` builds all of these on GitHub Actions and attaches them to a release (see the main README).
 
 ### Code signing
 
 `build.sh` signs the app with a self-signed certificate, "PingGadget Code Signing", which it creates on the first build in its own keychain, `~/Library/Keychains/pinggadget-codesign.keychain-db`. macOS remembers the Accessibility permission for "this app signed by this certificate", so the grant isn't lost on restart or when you install a newer build. Keep that keychain file (back it up if you rebuild on another Mac); a new certificate means granting Accessibility once more on every Mac.
+
+GitHub Actions starts from a clean Mac each time, so give it the same certificate, or every release would ask for Accessibility again. Once:
+
+1. Run `sh macos/export-signing-identity.sh`. macOS asks before exporting the private key: enter the keychain password `pinggadget` and click **Allow**. The script copies the certificate (base64) to the clipboard and prints a password.
+2. In GitHub, open the repository's **Settings → Secrets and variables → Actions** and add two repository secrets: `MACOS_SIGNING_P12` (paste the clipboard) and `MACOS_SIGNING_P12_PASSWORD` (the printed password).
+
+Without these secrets the build still works, but signs with a throwaway certificate and shows a warning.
 
 ## Install on another Mac
 

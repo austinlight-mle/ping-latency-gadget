@@ -1,8 +1,10 @@
 name: Build and release
 
-# Every push to main builds the Windows and macOS apps. If the version in the VERSION file has no
-# release yet, a release "v<version>" is published with both downloads. Otherwise the build only
-# checks that everything still compiles: bump VERSION to publish a new release.
+# Every push to main builds the Windows app and every kind of macOS download (universal, Apple
+# silicon, Intel, disk image). If the version in the VERSION file has no release yet, release
+# "v<version>" is published with all of them. Otherwise the builds replace the pre-release
+# "latest-build", so the newest commit on main can always be downloaded: bump VERSION to publish
+# a proper release.
 on:
   push:
     branches: [main]
@@ -72,42 +74,100 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build
+        # The certificate from the developer's Mac (macos/export-signing-identity.sh), so every
+        # release is signed the same way and Macs keep their Accessibility grant across updates.
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
         run: sh macos/build.sh
-      - name: Check version and architectures
+      - name: Check the downloads
         run: |
-          app=macos/bin/PingGadget.app
-          v=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
-          if [ "$v" != "${{ needs.version.outputs.version }}" ]; then
-            echo "::error::PingGadget.app has version '$v'"
-            exit 1
-          fi
-          echo "PingGadget.app version $v, architectures: $(lipo -archs "$app/Contents/MacOS/PingGadget")"
+          set -e
+          cd macos/bin
+          check() { # <download> <expected architectures>
+            dir=$(mktemp -d)
+            case "$1" in
+              *.zip) ditto -x -k "$1" "$dir" ; app="$dir/PingGadget.app" ;;
+              *.dmg) hdiutil attach -quiet -readonly -nobrowse -mountpoint "$dir/mnt" "$1"; app="$dir/mnt/PingGadget.app" ;;
+            esac
+            v=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
+            archs=$(lipo -archs "$app/Contents/MacOS/PingGadget")
+            min=$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")
+            codesign --verify --deep --strict "$app"
+            case "$1" in *.dmg) hdiutil detach -quiet "$dir/mnt" ;; esac
+            if [ "$v" != "${{ needs.version.outputs.version }}" ]; then
+              echo "::error::$1 has version '$v'"; exit 1
+            fi
+            if [ "$archs" != "$2" ]; then
+              echo "::error::$1 has architectures '$archs', expected '$2'"; exit 1
+            fi
+            echo "$1: version $v, $archs, macOS $min+, signature OK"
+          }
+          check PingGadget-macOS.zip "x86_64 arm64"
+          check PingGadget-macOS-AppleSilicon.zip "arm64"
+          check PingGadget-macOS-Intel.zip "x86_64"
+          check PingGadget-macOS.dmg "x86_64 arm64"
       - uses: actions/upload-artifact@v7
         with:
           name: macos
-          path: macos/bin/PingGadget-macOS.zip
+          path: |
+            macos/bin/PingGadget-macOS.zip
+            macos/bin/PingGadget-macOS-AppleSilicon.zip
+            macos/bin/PingGadget-macOS-Intel.zip
+            macos/bin/PingGadget-macOS.dmg
           if-no-files-found: error
 
   release:
     name: Publish release
     needs: [version, windows, macos]
-    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Create release v${{ needs.version.outputs.version }}
+      - name: Write release notes
+        run: |
+          cat > notes.md << 'EOF'
+          ## Downloads
+
+          | | File |
+          |---|---|
+          | **Windows** | `PingGadget.exe`: run it (it asks for administrator rights) |
+          | **Mac, any** (recommended) | `PingGadget-macOS.zip`: universal, Intel and Apple silicon |
+          | **Mac, as a disk image** | `PingGadget-macOS.dmg`: universal; open it and drag Ping Gadget to Applications |
+          | **Mac with Apple silicon** (M1 and later) | `PingGadget-macOS-AppleSilicon.zip`: macOS 11 or later, smallest download |
+          | **Mac with Intel** | `PingGadget-macOS-Intel.zip`: macOS 10.13 or later |
+
+          Not sure which Mac you have? Apple menu → About This Mac: "Chip: Apple M…" is Apple silicon, "Processor: … Intel" is Intel. The universal zip works on both.
+
+          **macOS:** unzip and move `PingGadget.app` to Applications. The app isn't notarized by Apple, so the first launch needs **Open Anyway** (System Settings → Privacy & Security) or Control-click → **Open**. If macOS says it's damaged, run `xattr -dr com.apple.quarantine /Applications/PingGadget.app`. See the macOS README.
+          EOF
+
+      - name: Publish v${{ needs.version.outputs.version }}
+        if: needs.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          cat > notes.md << 'EOF'
-          **Windows:** download `PingGadget.exe` and run it (it asks for administrator rights).
-
-          **macOS:** download `PingGadget-macOS.zip`, unzip it and move `PingGadget.app` to Applications. The app isn't notarized, so the first launch needs **Open Anyway** (System Settings → Privacy & Security) or Control-click → **Open**; see the macOS README.
-          EOF
-          gh release create "v$VERSION" dist/PingGadget.exe dist/PingGadget-macOS.zip \
+          gh release create "v$VERSION" dist/* \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Ping Gadget $VERSION" --notes-file notes.md --generate-notes
+
+      - name: Update the latest-build pre-release
+        if: needs.version.outputs.publish != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          short=$(echo "$GITHUB_SHA" | cut -c1-7)
+          {
+            echo "The newest build from \`main\` (commit $short), replaced on every push. It isn't a numbered release: for the latest stable version, see the release marked **Latest**."
+            echo
+            cat notes.md
+          } > prerelease.md
+          # Recreate it so the tag moves to this commit and only this build's files are attached.
+          gh release delete latest-build --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest-build dist/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Latest build from main ($VERSION, $short)" --notes-file prerelease.md

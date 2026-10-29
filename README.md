@@ -11,7 +11,17 @@ Up=1.5Mbps  Down=2.5Mbps   [Router 2 ▾]
 
 ## Download
 
-Get the latest version from [Releases](https://github.com/austinlight-mle/ping-latency-gadget/releases/latest): `PingGadget.exe` for Windows, `PingGadget-macOS.zip` for macOS.
+Get the latest version from [Releases](https://github.com/austinlight-mle/ping-latency-gadget/releases/latest):
+
+| | File |
+|---|---|
+| Windows | `PingGadget.exe` |
+| Mac, any (recommended) | `PingGadget-macOS.zip`: universal, Intel and Apple silicon |
+| Mac, as a disk image | `PingGadget-macOS.dmg`: universal, drag to Applications |
+| Mac with Apple silicon (M1 and later) | `PingGadget-macOS-AppleSilicon.zip`: macOS 11+, smallest |
+| Mac with Intel | `PingGadget-macOS-Intel.zip`: macOS 10.13+ |
+
+The build of the newest commit on `main` is always available as the [latest-build](https://github.com/austinlight-mle/ping-latency-gadget/releases/tag/latest-build) pre-release.
 
 ## Build
 
@@ -19,7 +29,9 @@ Run `build.cmd`. It uses the C# compiler that ships with Windows (.NET Framework
 
 ## Releases
 
-The version lives in the `VERSION` file (three numbers, e.g. `1.2.0`) and is stamped into both apps. Every push to `main` makes GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) build the Windows and macOS apps. If no release exists yet for that version, it publishes release `v<version>` with both downloads. If one already exists, the build only checks that everything compiles. To publish, bump `VERSION` and push.
+The version lives in the `VERSION` file (three numbers, e.g. `1.2.0`) and is stamped into both apps. Every push to `main` makes GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) build the Windows and macOS apps. If no release exists yet for that version, it publishes release `v<version>` with all the downloads above. If one already exists, it replaces the `latest-build` pre-release with this build instead, so every push can be downloaded. To publish a numbered release, bump `VERSION` and push.
+
+The macOS app is signed with the same certificate as on the developer's Mac when the repository has the `MACOS_SIGNING_P12` and `MACOS_SIGNING_P12_PASSWORD` secrets; see [macos/README.md](macos/README.md#code-signing).
 
 ## Use
 

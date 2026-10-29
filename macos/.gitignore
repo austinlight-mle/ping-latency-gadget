@@ -1,1 +1,4 @@
 build/
+# Downloads made by build.sh; GitHub Actions publishes them as release files.
+bin/PingGadget-macOS-*.zip
+bin/PingGadget-macOS.dmg
