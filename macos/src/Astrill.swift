@@ -227,3 +227,35 @@ enum Astrill {
         return value as? T
     }
 }
+
+// The Accessibility permission, needed to press Astrill's ON/OFF toggle. Without it Astrill is
+// quit and restarted instead.
+enum AccessibilityPermission {
+    private static let askedKey = "AskedForAccessibility"
+
+    static var isGranted: Bool {
+        return AXIsProcessTrusted()
+    }
+
+    // Asks the first time only, so a missing grant never nags at every login (Settings has a
+    // button for later). Right after login the check can fail for a moment, so it waits first.
+    static func requestOnce() {
+        guard !UserDefaults.standard.bool(forKey: askedKey) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            UserDefaults.standard.set(true, forKey: askedKey)
+            if isGranted { return }
+            let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+        }
+    }
+
+    // Opens System Settings → Privacy & Security → Accessibility.
+    static func openSettings() {
+        // Adds the app to the list (switched off) so there's something to switch on.
+        let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([prompt: false] as CFDictionary)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}

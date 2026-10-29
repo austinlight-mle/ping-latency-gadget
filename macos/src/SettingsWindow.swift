@@ -129,6 +129,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         addHeader("General", to: root)
         root.addArrangedSubview(chkStartup)
         root.addArrangedSubview(chkAstrill)
+        if !AccessibilityPermission.isGranted {
+            let allow = NSButton(title: "Allow Accessibility…", target: self, action: #selector(allowAccessibility))
+            root.addArrangedSubview(row([label("Pressing Astrill's ON/OFF switch needs Accessibility."), allow]))
+        }
         root.addArrangedSubview(row([label("Stop waiting for a router switch after"), switchTimeoutBox, label("seconds")]))
 
         // Style
@@ -174,6 +178,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         NSColorPanel.shared.orderOut(nil)
         onClose?()
+    }
+
+    @objc private func allowAccessibility() {
+        AccessibilityPermission.openSettings()
     }
 
     @objc private func autoSwitchChanged() {

@@ -11,12 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         gadget = g
         g.show()
 
-        // Ask for the permissions once, after the gadget is on screen.
+        // Ask for the permissions after the gadget is on screen.
         DispatchQueue.main.async {
-            if settings.toggleAstrill && Astrill.isInstalled(settings.astrillPath) && !AXIsProcessTrusted() {
-                // Needed to press Astrill's ON/OFF toggle; without it Astrill is quit and restarted instead.
-                let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-                _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+            if settings.toggleAstrill && Astrill.isInstalled(settings.astrillPath) {
+                AccessibilityPermission.requestOnce()
             }
             if !settings.routers.isEmpty && !Helper.isInstalled() {
                 try? Helper.install()
